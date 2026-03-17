@@ -12,13 +12,15 @@ interface Todo {
 
 type CreateTodoInput = Omit<Todo, 'id'>
 
+const API_BASE = 'https://jsonplaceholder.typicode.com'
+
 // Fetch functions
 
 async function fetchTodos(filters?: {
   completed?: boolean
   userId?: number
 }): Promise<Todo[]> {
-  const url = new URL('https://jsonplaceholder.typicode.com/todos')
+  const url = new URL(`${API_BASE}/todos`)
   if (filters?.completed !== undefined)
     url.searchParams.set('completed', String(filters.completed))
   if (filters?.userId !== undefined)
@@ -29,13 +31,13 @@ async function fetchTodos(filters?: {
 }
 
 async function fetchTodo(id: string): Promise<Todo> {
-  const res = await fetch(`https://jsonplaceholder.typicode.com/todos/${id}`)
+  const res = await fetch(`${API_BASE}/todos/${id}`)
   if (!res.ok) throw new Error(`Failed to fetch todo ${id}`)
   return res.json()
 }
 
 async function createTodo(input: CreateTodoInput): Promise<Todo> {
-  const res = await fetch('https://jsonplaceholder.typicode.com/todos', {
+  const res = await fetch(`${API_BASE}/todos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -45,7 +47,7 @@ async function createTodo(input: CreateTodoInput): Promise<Todo> {
 }
 
 async function toggleTodo(id: number, completed: boolean): Promise<Todo> {
-  const res = await fetch(`https://jsonplaceholder.typicode.com/todos/${id}`, {
+  const res = await fetch(`${API_BASE}/todos/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ completed }),
