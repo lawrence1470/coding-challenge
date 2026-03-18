@@ -4,7 +4,7 @@ export const userKeys = {
   list: (filters?: { role?: string; active?: boolean }) =>
     [...userKeys.lists(), filters] as const,
   details: () => [...userKeys.all, 'detail'] as const,
-  detail: (id: string) => [...userKeys.details(), id] as const,
+  detail: (id: number) => [...userKeys.details(), id] as const,
 }
 
 export const todoKeys = {
@@ -13,5 +13,5 @@ export const todoKeys = {
   list: (filters?: { completed?: boolean; userId?: number }) =>
     [...todoKeys.lists(), filters] as const,
   details: () => [...todoKeys.all, 'detail'] as const,
-  detail: (id: string) => [...todoKeys.details(), id] as const,
+  detail: (id: number) => [...todoKeys.details(), id] as const,
 }

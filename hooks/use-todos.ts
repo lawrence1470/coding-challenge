@@ -1,62 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { todoKeys } from '@/lib/query-keys'
-
-// Types
-
-interface Todo {
-  id: number
-  title: string
-  completed: boolean
-  userId: number
-}
-
-type CreateTodoInput = Omit<Todo, 'id'>
-
-const API_BASE = 'https://jsonplaceholder.typicode.com'
-
-// Fetch functions
-
-async function fetchTodos(filters?: {
-  completed?: boolean
-  userId?: number
-}): Promise<Todo[]> {
-  const url = new URL(`${API_BASE}/todos`)
-  if (filters?.completed !== undefined)
-    url.searchParams.set('completed', String(filters.completed))
-  if (filters?.userId !== undefined)
-    url.searchParams.set('userId', String(filters.userId))
-  const res = await fetch(url.toString())
-  if (!res.ok) throw new Error('Failed to fetch todos')
-  return res.json()
-}
-
-async function fetchTodo(id: string): Promise<Todo> {
-  const res = await fetch(`${API_BASE}/todos/${id}`)
-  if (!res.ok) throw new Error(`Failed to fetch todo ${id}`)
-  return res.json()
-}
-
-async function createTodo(input: CreateTodoInput): Promise<Todo> {
-  const res = await fetch(`${API_BASE}/todos`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-  if (!res.ok) throw new Error('Failed to create todo')
-  return res.json()
-}
-
-async function toggleTodo(id: number, completed: boolean): Promise<Todo> {
-  const res = await fetch(`${API_BASE}/todos/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ completed }),
-  })
-  if (!res.ok) throw new Error(`Failed to update todo ${id}`)
-  return res.json()
-}
-
-// Hooks
+import type { Todo } from '@/lib/types'
+import { fetchTodos, fetchTodo, createTodo, toggleTodo } from '@/lib/api/todos'
 
 export function useTodos(filters?: { completed?: boolean; userId?: number }) {
   return useQuery({
@@ -65,11 +10,28 @@ export function useTodos(filters?: { completed?: boolean; userId?: number }) {
   })
 }
 
-export function useTodo(id: string) {
+export function useTodo(id: number) {
+  const queryClient = useQueryClient()
   return useQuery({
     queryKey: todoKeys.detail(id),
     queryFn: () => fetchTodo(id),
     enabled: !!id,
+    placeholderData: () => {
+      // Pull from any cached list while the detail query loads
+      return queryClient
+        .getQueryData<Todo[]>(todoKeys.lists())
+        ?.find((todo) => todo.id === id)
+    },
+  })
+}
+
+export function useCompletedTodoCount(filters?: {
+  userId?: number
+}) {
+  return useQuery({
+    queryKey: todoKeys.list(filters),
+    queryFn: () => fetchTodos(filters),
+    select: (todos) => todos.filter((todo) => todo.completed).length,
   })
 }
 
@@ -88,13 +50,45 @@ export function useToggleTodo() {
   return useMutation({
     mutationFn: ({ id, completed }: { id: number; completed: boolean }) =>
       toggleTodo(id, completed),
-    onSuccess: (updatedTodo) => {
-      // Update the specific todo in cache immediately
-      queryClient.setQueryData(
-        todoKeys.detail(String(updatedTodo.id)),
-        updatedTodo,
+    onMutate: async ({ id, completed }) => {
+      // Cancel outgoing refetches so they don't overwrite our optimistic update
+      await queryClient.cancelQueries({ queryKey: todoKeys.detail(id) })
+      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
+
+      // Snapshot previous values for rollback
+      const previousDetail = queryClient.getQueryData<Todo>(todoKeys.detail(id))
+      const previousLists = queryClient.getQueriesData<Todo[]>({
+        queryKey: todoKeys.lists(),
+      })
+
+      // Optimistically update detail cache
+      queryClient.setQueryData<Todo>(todoKeys.detail(id), (old) =>
+        old ? { ...old, completed } : old,
       )
-      // Invalidate lists so they reflect the change
+
+      // Optimistically update all list caches
+      queryClient.setQueriesData<Todo[]>(
+        { queryKey: todoKeys.lists() },
+        (old) =>
+          old?.map((todo) =>
+            todo.id === id ? { ...todo, completed } : todo,
+          ),
+      )
+
+      return { previousDetail, previousLists }
+    },
+    onError: (_err, { id }, context) => {
+      // Rollback detail cache
+      if (context?.previousDetail) {
+        queryClient.setQueryData(todoKeys.detail(id), context.previousDetail)
+      }
+      // Rollback all list caches
+      context?.previousLists?.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data)
+      })
+    },
+    onSettled: () => {
+      // Always refetch to ensure server state consistency
       queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
     },
   })
