@@ -13,16 +13,21 @@
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
+# tanstack start
+/.output/
+/.vinxi/
 
 # production
 /build
+/dist
 
 # misc
 .DS_Store
 *.pem
+CLAUDE*
+.claude/
+.context/
+.tanstack/
 
 # debug
 npm-debug.log*
@@ -38,4 +43,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
+
+/prisma/lib/generated/prisma
+/src/lib/generated/prisma
