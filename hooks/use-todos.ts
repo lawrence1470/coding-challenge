@@ -1,95 +1,101 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+'use client'
+
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+  type InfiniteData,
+} from '@tanstack/react-query'
 import { todoKeys } from '@/lib/query-keys'
+import { PAGE_SIZE } from '@/lib/constants'
 import type { Todo } from '@/lib/types'
-import { fetchTodos, fetchTodo, createTodo, toggleTodo } from '@/lib/api/todos'
+import {
+  fetchTodosPaginated,
+  fetchTodo,
+  createTodo,
+  deleteTodo,
+  toggleTodo,
+} from '@/lib/api/todos'
 
-export function useTodos(filters?: { completed?: boolean; userId?: number }) {
-  return useQuery({
-    queryKey: todoKeys.list(filters),
-    queryFn: () => fetchTodos(filters),
-  })
-}
+type TodoInfiniteData = InfiniteData<Todo[], number>
 
-export function useTodo(id: number) {
+function useOptimisticMutation<TInput, TOutput>(
+  mutationFn: (input: TInput) => Promise<TOutput>,
+  updater: (old: TodoInfiniteData, input: TInput) => TodoInfiniteData,
+) {
   const queryClient = useQueryClient()
-  return useQuery({
-    queryKey: todoKeys.detail(id),
-    queryFn: () => fetchTodo(id),
-    enabled: !!id,
-    placeholderData: () => {
-      // Pull from any cached list while the detail query loads
-      return queryClient
-        .getQueryData<Todo[]>(todoKeys.lists())
-        ?.find((todo) => todo.id === id)
+  const queryKey = todoKeys.infinite()
+  return useMutation({
+    mutationFn,
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<TodoInfiniteData>(queryKey)
+      queryClient.setQueryData<TodoInfiniteData>(queryKey, (old) =>
+        old ? updater(old, input) : old,
+      )
+      return { previous }
     },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous)
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
   })
 }
 
-export function useCompletedTodoCount(filters?: {
-  userId?: number
-}) {
-  return useQuery({
-    queryKey: todoKeys.list(filters),
-    queryFn: () => fetchTodos(filters),
-    select: (todos) => todos.filter((todo) => todo.completed).length,
+export function useInfiniteTodos() {
+  return useInfiniteQuery({
+    queryKey: todoKeys.infinite(),
+    queryFn: ({ pageParam }) =>
+      fetchTodosPaginated({ page: pageParam, limit: PAGE_SIZE }),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage, _allPages, lastPageParam) =>
+      lastPage.length < PAGE_SIZE ? undefined : lastPageParam + 1,
   })
 }
 
 export function useCreateTodo() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: createTodo,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-    },
+  return useOptimisticMutation(createTodo, (old, newTodoInput) => {
+    const optimisticTodo: Todo = {
+      ...newTodoInput,
+      description: newTodoInput.description ?? null,
+      id: Date.now(),
+      userId: '',
+      createdAt: new Date().toISOString(),
+    }
+    return {
+      ...old,
+      pages: [[optimisticTodo, ...old.pages[0]], ...old.pages.slice(1)],
+    }
   })
 }
 
+export function useDeleteTodo() {
+  return useOptimisticMutation(
+    (id: number) => deleteTodo(id),
+    (old, id) => ({
+      ...old,
+      pages: old.pages.map((page) => page.filter((todo) => todo.id !== id)),
+    }),
+  )
+}
+
 export function useToggleTodo() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, completed }: { id: number; completed: boolean }) =>
+  return useOptimisticMutation(
+    ({ id, completed }: { id: number; completed: boolean }) =>
       toggleTodo(id, completed),
-    onMutate: async ({ id, completed }) => {
-      // Cancel outgoing refetches so they don't overwrite our optimistic update
-      await queryClient.cancelQueries({ queryKey: todoKeys.detail(id) })
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
+    (old, { id, completed }) => ({
+      ...old,
+      pages: old.pages.map((page) =>
+        page.map((todo) => (todo.id === id ? { ...todo, completed } : todo)),
+      ),
+    }),
+  )
+}
 
-      // Snapshot previous values for rollback
-      const previousDetail = queryClient.getQueryData<Todo>(todoKeys.detail(id))
-      const previousLists = queryClient.getQueriesData<Todo[]>({
-        queryKey: todoKeys.lists(),
-      })
-
-      // Optimistically update detail cache
-      queryClient.setQueryData<Todo>(todoKeys.detail(id), (old) =>
-        old ? { ...old, completed } : old,
-      )
-
-      // Optimistically update all list caches
-      queryClient.setQueriesData<Todo[]>(
-        { queryKey: todoKeys.lists() },
-        (old) =>
-          old?.map((todo) =>
-            todo.id === id ? { ...todo, completed } : todo,
-          ),
-      )
-
-      return { previousDetail, previousLists }
-    },
-    onError: (_err, { id }, context) => {
-      // Rollback detail cache
-      if (context?.previousDetail) {
-        queryClient.setQueryData(todoKeys.detail(id), context.previousDetail)
-      }
-      // Rollback all list caches
-      context?.previousLists?.forEach(([queryKey, data]) => {
-        queryClient.setQueryData(queryKey, data)
-      })
-    },
-    onSettled: () => {
-      // Always refetch to ensure server state consistency
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-    },
+export function useTodoDetail(id: number) {
+  return useSuspenseQuery({
+    queryKey: todoKeys.detail(id),
+    queryFn: () => fetchTodo(id),
   })
 }
